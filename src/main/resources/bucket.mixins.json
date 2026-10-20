@@ -1,0 +1,14 @@
+{
+	"required": true,
+	"package": "dev.bucket.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"mixins": [
+		"ServerGamePacketListenerImplMixin",
+		"ServerCommonPacketListenerImplMixin",
+		"ServerboundMovePlayerPacketMixin",
+		"LivingEntityMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
