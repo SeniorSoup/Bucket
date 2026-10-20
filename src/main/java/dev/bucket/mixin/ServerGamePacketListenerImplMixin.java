@@ -21,7 +21,9 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 
 /**
  * Every handler is wrapped. Handlers run twice (network thread, then server thread); the first run just
@@ -34,13 +36,22 @@ import org.spongepowered.asm.mixin.Mixin;
 @Mixin(ServerGamePacketListenerImpl.class)
 public abstract class ServerGamePacketListenerImplMixin {
 
+	/** Non-null while the server waits for the client to confirm a teleport; vanilla ignores movement packets then. */
+	@Shadow
+	private Vec3 awaitingPositionFromClient;
+
 	// ------------------------------------------------------------------ movement
 	@WrapMethod(method = "handleMovePlayer")
 	private void bucket$move(ServerboundMovePlayerPacket packet, Operation<Void> original) {
 		ServerGamePacketListenerImpl self = (ServerGamePacketListenerImpl) (Object) this;
 		ServerPlayer p = self.getPlayer();
 		BucketConfig c = BucketConfig.get();
-		if (!c.enabled || !BucketMod.onServerThread(p)) {
+		if (!Detector.active(p) || !BucketMod.onServerThread(p)) {
+			original.call(packet);
+			return;
+		}
+
+		if (this.awaitingPositionFromClient != null) { // pending teleport: vanilla drops these packets anyway
 			original.call(packet);
 			return;
 		}
@@ -72,6 +83,22 @@ public abstract class ServerGamePacketListenerImplMixin {
 
 		double preX = p.getX(), preY = p.getY(), preZ = p.getZ();
 
+		// Spoofed-packet guard: reject impossible packets BEFORE the server applies them, so a fake "moved very fast"
+		// packet can never feed velocity-based damage (spear charge) or fall distance (mace).
+		if (c.preValidateMovement) {
+			double px = packet.getX(preX), py = packet.getY(preY), pz = packet.getZ(preZ);
+			if (px != preX || py != preY || pz != preZ) {
+				MovementChecks.Violation pre = MovementChecks.impossible(p, st, px, py, pz, now, elapsed, c);
+				if (pre != MovementChecks.Violation.NONE) {
+					Detector.Cat cat = pre == MovementChecks.Violation.SPEED ? Detector.Cat.SPEED : Detector.Cat.FLY;
+					if (Detector.violation(p, cat, st.moveDebug)) {
+						self.teleport(preX, preY, preZ, p.getYRot(), p.getXRot());
+						return;
+					}
+				}
+			}
+		}
+
 		MoveContext.CURRENT.set(p);
 		try {
 			original.call(packet);
@@ -86,13 +113,15 @@ public abstract class ServerGamePacketListenerImplMixin {
 		boolean accept = v == MovementChecks.Violation.NONE;
 		if (!accept) {
 			Detector.Cat cat = v == MovementChecks.Violation.SPEED ? Detector.Cat.SPEED : Detector.Cat.FLY;
-			String detail = String.format("horizontal %.2f, vertical %.2f blocks in one packet",
-				Math.hypot(nx - preX, nz - preZ), ny - preY);
-			if (Detector.violation(p, cat, detail)) {
+			if (Detector.violation(p, cat, st.moveDebug)) {
+				p.setDeltaMovement(Vec3.ZERO);
 				self.teleport(preX, preY, preZ, p.getYRot(), p.getXRot());
 				return;
 			}
-			accept = true; // observed only
+			// Observed only (not enforced): let it through and re-baseline. Without this the check's state goes stale
+			// and every following packet of the same jump would be counted as a new violation.
+			st.reset(p, now, 0);
+			return;
 		}
 		if (accept) {
 			st.lastX = nx;
@@ -107,7 +136,7 @@ public abstract class ServerGamePacketListenerImplMixin {
 		ServerGamePacketListenerImpl self = (ServerGamePacketListenerImpl) (Object) this;
 		ServerPlayer p = self.getPlayer();
 		BucketConfig c = BucketConfig.get();
-		if (!c.enabled || !BucketMod.onServerThread(p)) {
+		if (!Detector.active(p) || !BucketMod.onServerThread(p)) {
 			original.call(packet);
 			return;
 		}
@@ -128,7 +157,7 @@ public abstract class ServerGamePacketListenerImplMixin {
 		ServerGamePacketListenerImpl self = (ServerGamePacketListenerImpl) (Object) this;
 		ServerPlayer p = self.getPlayer();
 		BucketConfig c = BucketConfig.get();
-		if (!c.enabled || !BucketMod.onServerThread(p)) {
+		if (!Detector.active(p) || !BucketMod.onServerThread(p)) {
 			original.call(packet);
 			return;
 		}
@@ -153,7 +182,7 @@ public abstract class ServerGamePacketListenerImplMixin {
 		ServerGamePacketListenerImpl self = (ServerGamePacketListenerImpl) (Object) this;
 		ServerPlayer p = self.getPlayer();
 		BucketConfig c = BucketConfig.get();
-		if (!c.enabled || !BucketMod.onServerThread(p)) {
+		if (!Detector.active(p) || !BucketMod.onServerThread(p)) {
 			original.call(packet);
 			return;
 		}
@@ -180,7 +209,7 @@ public abstract class ServerGamePacketListenerImplMixin {
 		ServerGamePacketListenerImpl self = (ServerGamePacketListenerImpl) (Object) this;
 		ServerPlayer p = self.getPlayer();
 		BucketConfig c = BucketConfig.get();
-		if (!c.enabled || !BucketMod.onServerThread(p)) {
+		if (!Detector.active(p) || !BucketMod.onServerThread(p)) {
 			original.call(packet);
 			return;
 		}

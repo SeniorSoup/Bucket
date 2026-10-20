@@ -35,11 +35,23 @@ public final class Detector {
 
 	private Detector() {}
 
+	/**
+	 * Is this player checked at all? With listOnly (default) that is exactly the /anticheat checklist, so everybody
+	 * else is never touched. The client brand is irrelevant here, so a spoofed client is handled like any other.
+	 */
+	public static boolean active(ServerPlayer p) {
+		BucketConfig c = BucketConfig.get();
+		if (!c.enabled) return false;
+		return !c.listOnly || BucketMod.state(p).listed;
+	}
+
 	/** Should corrections be applied to this player right now? */
 	public static boolean enforcing(ServerPlayer p) {
 		BucketConfig c = BucketConfig.get();
-		if (c.enforceAll) return true;
-		return BucketMod.state(p).flagged || Watchlist.isChecklisted(p.getUUID());
+		PlayerState st = BucketMod.state(p);
+		if (st.listed) return true;
+		if (c.listOnly) return false;
+		return c.enforceAll || st.flagged;
 	}
 
 	public static boolean violation(ServerPlayer p, Cat cat, String detail) {
@@ -150,7 +162,15 @@ public final class Detector {
 		String low = b.toLowerCase(Locale.ROOT);
 		for (String s : c.blockedBrands) {
 			if (s != null && !s.isBlank() && low.contains(s.toLowerCase(Locale.ROOT))) {
-				violation(p, Cat.CLIENT_BRAND, Cat.CLIENT_BRAND.weight, "client brand \"" + b + "\"", false);
+				if (active(p)) {
+					violation(p, Cat.CLIENT_BRAND, Cat.CLIENT_BRAND.weight, "client brand \"" + b + "\"", false);
+				} else if (c.reportToStaff) {
+					String name = p.getName().getString();
+					broadcastStaff(p.level().getServer(), prefix()
+						.append(Component.literal(name).withStyle(ChatFormatting.YELLOW))
+						.append(Component.literal(" joined with a known cheat-client brand \"" + b + "\". Not checked: /anticheat add " + name)
+							.withStyle(ChatFormatting.GRAY)));
+				}
 				break;
 			}
 		}

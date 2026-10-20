@@ -8,66 +8,57 @@ import java.io.Reader;
 import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
 /** JSON config at config/bucket.json. Missing keys fall back to the defaults below. */
 public final class BucketConfig {
-	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-	private static BucketConfig instance = new BucketConfig();
+	/** Bump when defaults change in a way old files must not override. The old file is kept as bucket.json.old. */
+	private static final int CURRENT_VERSION = 2;
 
+	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	private static BucketConfig instance = fresh();
+	private static Path file;
+
+	/** Deliberately has NO initializer: files without it load as 0 and get reset to the new defaults. */
+	public int configVersion;
+
+	/** Master switch. Toggle in game with /anticheat enable|disable. */
 	public boolean enabled = true;
+	/**
+	 * true (default): ONLY players on the /anticheat checklist are checked and corrected. Everyone else is not touched at all.
+	 * false: everybody is observed, and only players detected as a hacked client (or listed) are corrected.
+	 */
+	public boolean listOnly = true;
 	/** Log every correction to the server console (useful while tuning). */
 	public boolean logCorrections = false;
 
-	// ---- who gets corrected ----
-	/**
-	 * false (default): checks run for everyone but only OBSERVE; corrections are applied only to players that were
-	 * detected as a hacked client or were added with /anticheat add. true: correct everybody (old behaviour).
-	 */
+	// ---- detection / reporting (used for listed players, and for everybody when listOnly=false) ----
+	/** With listOnly=false: true = correct everybody, not just flagged players. */
 	public boolean enforceAll = false;
-	/** Violation score at which a player is flagged as a hacked client. Lower = more sensitive. */
+	/** Violation score at which a player is flagged as a hacked client and "HACKCLIENT DETECTED" is reported. */
 	public double flagThreshold = 8;
-	/** How fast the violation score cools down, per second. */
 	public double scoreDecayPerSec = 0.25;
-	/** Send "HACKCLIENT DETECTED" to online staff (permission level 2+) and the console. */
 	public boolean reportToStaff = true;
 	public boolean reportToConsole = true;
-	/** Client brand strings (case-insensitive substring) that flag a player immediately. Many clients spoof this, so it's only a shortcut. */
+	/** Client brand strings (case-insensitive substring) that are reported / flagged. Cheat clients can spoof the brand, so this is only a hint. */
 	public List<String> blockedBrands = new ArrayList<>(List.of(
 		"liquidbounce", "meteor", "wurst", "impact", "aristois", "rusherhack",
 		"bleachhack", "salhack", "thunderhack", "futureclient", "novoline", "inertia"));
 
-	// ---- damage guard (spear / mace) ----
-	public boolean damageEnabled = true;
-	/** Max raw (pre-armor) damage one spear hit may deal. Anything above is impossible and is clamped. */
-	public double spearMaxRawDamage = 14;
-	/** Same, while the attacker is riding (mounted charge). */
-	public double spearMountedMaxRawDamage = 20;
-	/** Mace: fall distance the server tracked + this slack is the most that counts towards smash damage. */
-	public double maceFallSlack = 2.0;
-	/** Mace: for flagged players, never count more than this many blocks of fall. */
-	public double maceMaxFallBlocks = 24;
-	/** Flagged players: one spear/mace hit may never take more than this fraction of the victim's max health (after armor and enchants). */
-	public boolean blockOneShot = true;
-	public double flaggedMaxHitFraction = 0.7;
-
 	// ---- packet-rate ("timer") ----
 	public boolean timerEnabled = true;
-	/** Max banked time. Bigger = more tolerant to lag spikes, but also to blink/lag-switch. */
 	public double timerMaxCreditMs = 1000;
-	/** How far "ahead of real time" the client may run before packets are dropped. */
 	public double timerDebtMs = 150;
 
 	// ---- ground state ----
-	/** Server decides onGround from collisions instead of trusting the client (kills NoFall, packet Criticals, ground spoof). */
 	public boolean authoritativeOnGround = true;
 
 	// ---- movement ----
 	public boolean movementEnabled = true;
 	public double speedMultiplier = 1.15;
 	public double speedSlack = 0.06;
-	/** Bucket size in ticks of allowed movement. Also absorbs server lag spikes, so don't go much lower. */
 	public double bucketTicks = 20;
 	public double fluidMultiplier = 2.5;
 	public double slipperyMultiplier = 2.4;
@@ -76,10 +67,24 @@ public final class BucketConfig {
 	public long graceMs = 1500;
 	public long velocityGraceMs = 1200;
 	public long explosionGraceMs = 1500;
+	/**
+	 * Spoofed-packet guard: a movement packet is checked BEFORE the server applies it. One packet may cover at most this
+	 * many ticks of the player's speed, and may not rise more than maxRisePerPacket. Stops "move fast, then hit" tricks.
+	 */
+	public boolean preValidateMovement = true;
+	public double maxPacketTicks = 4.0;
+	public double maxRisePerPacket = 2.0;
 
 	// ---- flight / vertical ----
 	public boolean flightEnabled = true;
-	public double airSlack = 0.15;
+	/** Extra height allowed on top of the jump curve. */
+	public double airSlack = 0.3;
+	/** Extra airborne ticks of leniency on the jump curve. */
+	public int airExtraTicks = 2;
+	/** Over-the-bound packets in a row before it counts as Fly. One-off noise while jumping is ignored. */
+	public int flyStrikes = 3;
+	/** Extra step-up height allowed on top of the player's step height. */
+	public double stepSlack = 0.2;
 
 	// ---- combat ----
 	public boolean combatEnabled = true;
@@ -88,6 +93,21 @@ public final class BucketConfig {
 	public int maxAttacksPerTick = 2;
 	public boolean oneTargetPerTick = true;
 	public boolean noInteractWhileUsingItem = true;
+	/** Also check reach / line of sight at the moment damage is dealt, so spear jab, lunge and charge hits cannot bypass the packet checks. */
+	public boolean hitReachCheck = true;
+	/** Spear attack reach (jab). Anything above spearReach + entityReachTolerance is dropped. */
+	public double spearReach = 4.5;
+	/** Extra reach allowed for sword sweep hits on secondary targets. */
+	public double sweepExtraReach = 1.5;
+
+	// ---- damage guard (spear / mace) ----
+	public boolean damageEnabled = true;
+	public double spearMaxRawDamage = 12;
+	public double spearMountedMaxRawDamage = 20;
+	public double maceFallSlack = 2.0;
+	public double maceMaxFallBlocks = 24;
+	public boolean blockOneShot = true;
+	public double flaggedMaxHitFraction = 0.7;
 
 	// ---- world ----
 	public boolean worldEnabled = true;
@@ -95,7 +115,6 @@ public final class BucketConfig {
 	public boolean blockLineOfSight = true;
 	public int maxBreaksPerTick = 1;
 	public int maxPlacesPerTick = 2;
-	/** 0 disables. Max angle between look direction and the clicked point. */
 	public double placeMaxAngleDeg = 80;
 	public boolean blockAirPlace = true;
 
@@ -103,26 +122,45 @@ public final class BucketConfig {
 	public boolean inventoryEnabled = true;
 	public int maxContainerClicksPerTick = 8;
 
+	private static BucketConfig fresh() {
+		BucketConfig c = new BucketConfig();
+		c.configVersion = CURRENT_VERSION;
+		return c;
+	}
+
 	public static BucketConfig get() {
 		return instance;
 	}
 
 	public static void load(Path dir) {
-		Path file = dir.resolve("bucket.json");
+		file = dir.resolve("bucket.json");
 		try {
 			if (Files.exists(file)) {
+				BucketConfig loaded;
 				try (Reader r = Files.newBufferedReader(file)) {
-					BucketConfig loaded = GSON.fromJson(r, BucketConfig.class);
-					if (loaded != null) instance = loaded;
+					loaded = GSON.fromJson(r, BucketConfig.class);
+				}
+				if (loaded != null && loaded.configVersion >= CURRENT_VERSION) {
+					instance = loaded;
+				} else {
+					Files.copy(file, dir.resolve("bucket.json.old"), StandardCopyOption.REPLACE_EXISTING);
+					BucketMod.LOGGER.info("Old bucket.json replaced by the new defaults (backup: bucket.json.old)");
+					instance = fresh();
 				}
 			}
-			// Always rewrite so new keys appear after updates.
-			try (Writer w = Files.newBufferedWriter(file)) {
-				GSON.toJson(instance, w);
-			}
+			save();
 		} catch (IOException | RuntimeException e) {
 			BucketMod.LOGGER.error("Could not read/write {}; using defaults", file, e);
-			instance = new BucketConfig();
+			instance = fresh();
+		}
+	}
+
+	public static synchronized void save() {
+		if (file == null) return;
+		try (Writer w = Files.newBufferedWriter(file)) {
+			GSON.toJson(instance, w);
+		} catch (IOException e) {
+			BucketMod.LOGGER.error("Could not write {}", file, e);
 		}
 	}
 }

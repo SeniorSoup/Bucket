@@ -43,6 +43,7 @@ public abstract class ServerCommonPacketListenerImplMixin {
 	private void bucket$noteServerPush(Packet<?> packet, CallbackInfo ci) {
 		if (!((Object) this instanceof ServerGamePacketListenerImpl listener)) return;
 		BucketConfig c = BucketConfig.get();
+		if (!c.enabled) return;
 		ServerPlayer p = listener.getPlayer();
 		long now = System.currentTimeMillis();
 

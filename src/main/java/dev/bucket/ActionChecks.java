@@ -2,6 +2,8 @@ package dev.bucket;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.ItemTags;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
@@ -22,16 +24,27 @@ public final class ActionChecks {
 
 		Vec3 eye = p.getEyePosition();
 		AABB box = target.getBoundingBox();
-		double reach = p.entityInteractionRange() + c.entityReachTolerance;
+		double reach = attackReach(p, p.getMainHandItem(), c) + c.entityReachTolerance;
 		if (box.distanceToSqr(eye) > reach * reach) return Detector.Cat.REACH;
 
 		if (c.entityLineOfSight && !entityVisible(p, eye, box)) return Detector.Cat.KILLAURA;
-		if (c.noInteractWhileUsingItem && p.isUsingItem()) return Detector.Cat.KILLAURA;
+		if (c.noInteractWhileUsingItem && p.isUsingItem() && !p.getMainHandItem().is(ItemTags.SPEARS)) return Detector.Cat.KILLAURA;
 
 		if (c.oneTargetPerTick && st.attackTargetId != -1 && st.attackTargetId != target.getId()) return Detector.Cat.KILLAURA;
 		if (++st.attacksThisTick > c.maxAttacksPerTick) return Detector.Cat.KILLAURA;
 		st.attackTargetId = target.getId();
 		return null;
+	}
+
+	/** Base melee reach for this weapon: the player's interaction range, or the spear's longer attack range. */
+	public static double attackReach(ServerPlayer p, ItemStack weapon, BucketConfig c) {
+		double base = p.entityInteractionRange();
+		if (weapon != null && weapon.is(ItemTags.SPEARS)) base = Math.max(base, c.spearReach);
+		return base;
+	}
+
+	public static boolean canSeeEntity(ServerPlayer p, AABB box) {
+		return entityVisible(p, p.getEyePosition(), box);
 	}
 
 	private static boolean entityVisible(ServerPlayer p, Vec3 eye, AABB box) {

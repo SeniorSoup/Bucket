@@ -45,6 +45,9 @@ public final class BucketCommand {
 				.then(Commands.argument("name", StringArgumentType.word())
 					.suggests(KNOWN)
 					.executes(ctx -> remove(ctx.getSource(), StringArgumentType.getString(ctx, "name")))))
+			.then(Commands.literal("enable").executes(ctx -> setEnabled(ctx.getSource(), true)))
+			.then(Commands.literal("disable").executes(ctx -> setEnabled(ctx.getSource(), false)))
+			.then(Commands.literal("status").executes(ctx -> status(ctx.getSource())))
 			.then(Commands.literal("list")
 				.then(Commands.literal("clients").executes(ctx -> listClients(ctx.getSource())))
 				.then(Commands.literal("players").executes(ctx -> listPlayers(ctx.getSource())))
@@ -60,6 +63,7 @@ public final class BucketCommand {
 			src.sendFailure(Component.literal(name + " is already on the anticheat checklist."));
 			return 0;
 		}
+		BucketMod.state(target).listed = true;
 		send(src, name + " added to the anticheat checklist. Every check is now enforced on them.", true);
 		return 1;
 	}
@@ -76,14 +80,40 @@ public final class BucketCommand {
 		}
 		for (UUID id : removed) {
 			PlayerState st = BucketMod.stateIfPresent(id);
-			if (st != null) st.clearDetection();
+			if (st != null) {
+				st.clearDetection();
+				st.listed = false;
+			}
 		}
+		if (online != null) BucketMod.state(online).listed = false;
 
 		if (removed.isEmpty()) {
 			src.sendFailure(Component.literal(name + " is not on the checklist or the detected list."));
 			return 0;
 		}
 		send(src, name + " removed from the anticheat lists and their flag was cleared.", true);
+		return 1;
+	}
+
+	// ------------------------------------------------------------ enable / disable / status
+	private static int setEnabled(CommandSourceStack src, boolean on) {
+		BucketConfig c = BucketConfig.get();
+		if (c.enabled == on) {
+			src.sendFailure(Component.literal("Bucket is already " + (on ? "enabled." : "disabled.")));
+			return 0;
+		}
+		c.enabled = on;
+		BucketConfig.save();
+		send(src, "Bucket " + (on ? "enabled" : "disabled") + (on ? "." : ". No checks run and nobody is corrected until you /anticheat enable."), true);
+		return 1;
+	}
+
+	private static int status(CommandSourceStack src) {
+		BucketConfig c = BucketConfig.get();
+		send(src, "Bucket is " + (c.enabled ? "ENABLED" : "DISABLED")
+			+ " | scope: " + (c.listOnly ? "checklist only" : "everyone observed, flagged + listed corrected")
+			+ " | checklist: " + Watchlist.checklist().size()
+			+ " | detected hack clients: " + Watchlist.detected().size(), false);
 		return 1;
 	}
 
@@ -154,7 +184,8 @@ public final class BucketCommand {
 		lines.add(" Status: " + (flagged ? "HACK CLIENT DETECTED" : "clean") + (listed ? " | on checklist" : "")
 			+ (c.enforceAll ? " | enforcing everyone" : ""));
 		String brand = st != null && st.brand != null ? st.brand : (det != null && det.brand != null ? det.brand : "unknown");
-		lines.add(" Client brand: " + brand);
+		lines.add(" Client brand: " + brand + " (not used for decisions; spoofed clients are checked the same)");
+		lines.add(" Checks: " + (!c.enabled ? "OFF (Bucket disabled)" : (listed || !c.listOnly ? "running on this player" : "not running (not on the checklist)")));
 		if (st != null) {
 			double score;
 			synchronized (st) {

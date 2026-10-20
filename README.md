@@ -3,22 +3,24 @@
 Server-side only. Clients need nothing installed. Nobody is kicked, banned, damaged or alerted *by the game*; a
 cheat just stops working. Staff are told when a hacked client is detected.
 
-## How it decides who to correct
+## Who gets checked
 
-1. Every check runs for every player, but for a normal player it only **observes**: the action goes through and
-   adds to a violation score (which cools down over time).
-2. When the score reaches `flagThreshold` (default 8), the player is **flagged as a hacked client**:
-   - `HACKCLIENT DETECTED <name> (client: <brand>) Speed x9, Fly x2` is sent to online staff (op level 2+) and the console
-   - they are saved to `config/bucket-players.json` and stay flagged across rejoins/restarts until `/anticheat rm`
-3. From then on **only flagged players and checklisted players get corrected** (packet drops, setbacks, resyncs, damage caps).
-4. Shortcuts that flag instantly: a known cheat-client brand (`blockedBrands`), or physically impossible spear/mace damage.
+By default (`"listOnly": true`) Bucket **only checks players on the `/anticheat` checklist**. Everybody else is never
+touched, so legit players cannot be false-flagged and cost nothing. Listed players are always corrected, whatever the
+client claims to be, so a client that spoofs its brand as `vanilla` is handled exactly like any other.
 
-Set `"enforceAll": true` to get the old behaviour (correct everybody).
+- Spot a cheater, `/anticheat add <player>`, and every check is enforced on them immediately.
+- Cheat-client brands (`blockedBrands`) are only a hint: staff get a message suggesting `/anticheat add <name>`.
+- When a listed player trips enough checks, staff and the console get `HACKCLIENT DETECTED <name> (client: <brand>) Speed x9, Reach x4`.
+- Set `"listOnly": false` to observe everyone instead: violations only add to a score, and only players who reach
+  `flagThreshold` (or are listed) are corrected.
+- `/anticheat disable` switches every check off at runtime, `/anticheat enable` turns them back on. The setting is saved.
 
 ## Commands (op level 2)
 
 | Command | What it does |
 |---|---|
+| `/anticheat enable` / `disable` | master switch, saved to config. `/anticheat status` shows the current state |
 | `/anticheat <player>` | add an online player to the checklist (same as `add`) |
 | `/anticheat add <player>` | add to the checklist: every check is always enforced on them |
 | `/anticheat rm <name>` | remove from the checklist **and** clear a hack-client flag (works for offline names) |
@@ -26,9 +28,21 @@ Set `"enforceAll": true` to get the old behaviour (correct everybody).
 | `/anticheat list players` | the manual checklist |
 | `/anticheat list <player>` | stats: status, brand, score, corrections applied, violations per cheat, last violation |
 
+## Spoofed packets, spear velocity and reach
+
+- **Packets are checked before the server applies them.** A movement packet that covers more than a few ticks of speed
+  (`maxPacketTicks`) or rises more than `maxRisePerPacket` is rejected and the player is set back. A fake "moved very
+  fast" packet therefore never reaches velocity-based spear damage, and on a correction the player's motion is zeroed.
+- **Hits are checked when damage is dealt, not only when the attack packet arrives.** Reach and line of sight are
+  validated in the damage code, so spear jab, lunge and charge hits cannot bypass the packet checks. Spears use their
+  own `spearReach`; sword sweeps get `sweepExtraReach` on secondary targets. A failed hit does nothing at all (no damage, no knockback).
+- **Fly no longer fires on single noisy packets.** It takes `flyStrikes` (3) over-the-limit packets in a row, and the
+  jump curve has `airSlack` and `airExtraTicks` of leniency. `/anticheat list <player>` shows the exact numbers of the
+  last violation (for example `rise 1.62 > allowed 1.55 after 5 air packets`), so false positives can be tuned precisely.
+
 ## Spear and mace guard
 
-Only enforced against flagged / checklisted attackers, except for values that are impossible in vanilla.
+Applies to checked players; values that are impossible in vanilla are clamped even before a flag.
 
 - **Spear:** raw damage above `spearMaxRawDamage` (`spearMountedMaxRawDamage` when riding) is clamped.
 - **Mace:** smash damage scales with fall distance. The movement checks track the real height the player fell from;
@@ -64,6 +78,12 @@ and bed bounces, fluids, ladders, webs, bubble columns, honey and scaffolding.
   Real detection is the behaviour score.
 - **Speed at about 1.15x** vanilla is allowed on purpose (false-positive margin). Lower `speedMultiplier` and `speedSlack` to tighten.
 - A cheater is not corrected until they are flagged, which normally takes well under a second of cheating.
+
+## Upgrading from the previous version
+
+`config/bucket.json` is versioned. An older file is saved as `bucket.json.old` and replaced by the new defaults on
+first start (the old defaults were too strict for jumping). Re-apply your own tweaks afterwards. Your checklist in
+`config/bucket-players.json` is kept.
 
 ## Build
 
@@ -103,6 +123,7 @@ All are small renames if they differ in 26.2:
 - **New:** `LivingEntity.hurtServer(ServerLevel, DamageSource, float)` and `LivingEntity.getDamageAfterMagicAbsorb(DamageSource, float)` (the damage guard hooks)
 - **New:** `DamageSource.getWeaponItem()`, `DamageTypes.MACE_SMASH`, `ItemTags.SPEARS`, `Entity.fallDistance`
 - **New:** `BrandPayload.brand()`, `ServerboundCustomPayloadPacket.payload()`, field `connection` in `ServerCommonPacketListenerImpl`, and its `handleCustomPayload` method
+- **New:** `ServerGamePacketListenerImpl.awaitingPositionFromClient` (shadowed field), `ItemTags.SWORDS`, `Entity.setDeltaMovement`
 - **New:** permission checks: `Commands.hasPermission(Commands.LEVEL_GAMEMASTERS)` and `ServerPlayer.createCommandSourceStack()`. If the permission API differs, change `Detector.isStaff` and the `.requires(...)` in `BucketCommand`.
 - **New:** `EntityArgument.getPlayer`, `PlayerList.getPlayerByName/getPlayer(UUID)`, `CommandSourceStack.sendSuccess/sendFailure`
 - MixinExtras imports: if `com.llamalad7.mixinextras...` doesn't resolve, add

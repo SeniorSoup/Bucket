@@ -35,13 +35,14 @@ public final class BucketMod implements ModInitializer {
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			ServerPlayer p = handler.getPlayer();
 			PlayerState st = state(p);
+			st.listed = Watchlist.isChecklisted(p.getUUID());
 			if (Watchlist.isDetected(p.getUUID())) st.flagged = true; // stays flagged across restarts until /anticheat rm
 			Detector.announceKnown(p);
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) ->
 			STATES.remove(handler.getPlayer().getUUID()));
 
-		LOGGER.info("Bucket loaded: checks observe everyone, corrections only hit detected hack clients and checklisted players.");
+		LOGGER.info("Bucket loaded ({}).", BucketConfig.get().listOnly ? "checking only players on the /anticheat checklist" : "observing everyone, correcting flagged and checklisted players");
 	}
 
 	public static PlayerState state(ServerPlayer p) {

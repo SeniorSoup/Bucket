@@ -40,6 +40,11 @@ public final class PlayerState {
 	public int clicksThisTick;
 	public final Set<Long> breaksThisTick = new HashSet<>();
 
+	/** On the /anticheat checklist: always checked and corrected, whatever the client claims to be. */
+	public volatile boolean listed;
+	public int flyStrikes;
+	public volatile String moveDebug = "";
+
 	// ---- detection / reporting ----
 	/** True once this player has been identified as running a hacked client. Only flagged players get corrected. */
 	public volatile boolean flagged;
@@ -87,6 +92,7 @@ public final class PlayerState {
 		tokens = Double.NaN;
 		sessionValid = false;
 		airPackets = 0;
+		flyStrikes = 0;
 		timerCredit = 0;
 		lastPacketMs = now;
 		graceUntilMs = Math.max(graceUntilMs, now + graceMs);
